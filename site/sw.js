@@ -4,7 +4,7 @@
 // cache for an instant launch, then re-fetched in the background (stale-while-revalidate). When a re-fetched
 // file differs from the cached copy, the cache is updated and open pages are told, so the app reloads the
 // next time it comes to the foreground. VERSION only needs changing to force a full cache reset.
-const VERSION = 3;
+const VERSION = 4;
 const SHELL = `due-shell-v${VERSION}`;
 const DATA = 'due-data';
 const SHELL_FILES = [
@@ -92,6 +92,31 @@ function revalidate(event, href) {
     } catch { /* offline: keep the cached copy */ }
   })());
 }
+
+// ---- reminders (sent by the GitHub job, see notify.py) ----
+
+self.addEventListener('push', (event) => {
+  let msg = {};
+  try { msg = event.data ? event.data.json() : {}; } catch { msg = { body: event.data ? event.data.text() : '' }; }
+  // iOS requires every push to show a notification.
+  event.waitUntil(self.registration.showNotification(msg.title || 'Due', {
+    body: msg.body || '',
+    tag: msg.tag || undefined,
+    icon: scoped('icons/icon-192.png'),
+    data: { url: scoped('./') },
+  }));
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const url = (event.notification.data && event.notification.data.url) || scoped('./');
+  event.waitUntil((async () => {
+    const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    const open = wins.find((w) => w.url.startsWith(self.registration.scope));
+    if (open) { await open.focus(); open.postMessage({ type: 'REFRESH' }); return; }
+    await self.clients.openWindow(url);
+  })());
+});
 
 async function dataNetworkFirst(event) {
   const req = event.request;

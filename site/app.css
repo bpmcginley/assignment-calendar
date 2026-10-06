@@ -648,6 +648,23 @@ button.set-row { color: var(--accent); }
 button.set-row.danger-text { color: var(--danger); }
 button.set-row:active { background: var(--fill); }
 .set-row.warn { color: var(--warn); }
+.set-row.muted { color: var(--text-2); }
+/* Reminder setup code: selectable, monospaced, 16px so iOS doesn't zoom on focus. */
+.code-row { padding-top: var(--s3); padding-bottom: var(--s3); }
+.code-box {
+  display: block;
+  width: 100%;
+  padding: var(--s3);
+  border: 1px solid var(--field-border);
+  border-radius: var(--r-md);
+  background: var(--bg);
+  color: var(--text);
+  font: 400 16px/1.35 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  word-break: break-all;
+  resize: none;
+  -webkit-user-select: text;
+  user-select: text;
+}
 .set-note {
   font-size: var(--t-foot);
   line-height: 1.38;

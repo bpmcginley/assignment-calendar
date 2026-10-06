@@ -24,6 +24,7 @@ from Crypto.Cipher import AES  # pycryptodome (has wheels for Windows on ARM, un
 
 import canvas
 import gradescope
+import notify
 
 ROOT = Path(__file__).parent
 SITE = ROOT / "site"
@@ -230,11 +231,49 @@ def write(path, obj):
     print(f"wrote {path} ({path.stat().st_size // 1024} KB)")
 
 
+def add_reminders(payload, settings, previous, test=False):
+    """Plan and send push reminders (see notify.py); record what was sent inside the payload."""
+    private_key = (os.environ.get("VAPID_PRIVATE_KEY") or "").strip()
+    if not private_key or not settings["passphrase"]:
+        return
+    payload["push_public_key"] = notify.vapid_public_key(private_key)
+    devices, problems = notify.load_devices(ROOT / "push-subscriptions.json", settings["passphrase"], _key)
+    if previous is None:
+        state = None                                   # unknown: notify.plan avoids repeats conservatively
+    else:
+        state = previous.get("notify_state") or {}
+    now = datetime.now(timezone.utc)
+    notes, new_state = notify.plan(payload, state, now)
+    if test:
+        notes.insert(0, {"title": "Reminders are working", "kind": "test", "tag": "test",
+                         "body": "You'll get a reminder 6 hours before each deadline and a summary at 10 AM."})
+    results = notify.send(devices, notes, private_key) if devices and notes else []
+
+    stamp = now.isoformat(timespec="seconds")
+    before = {d["id"]: d for d in ((previous or {}).get("reminders") or {}).get("devices", [])}
+    listed = []
+    for name, sub in devices:
+        did = notify.device_id(sub["endpoint"])
+        d = dict(before.get(did) or {"id": did, "ok": True, "error": None, "last_sent": None})
+        d["name"] = name
+        r = next((x for x in results if x["id"] == did), None)
+        if r:
+            d.update(ok=r["ok"], error=r["error"])
+            if r["ok"]:
+                d["last_sent"] = stamp
+        listed.append(d)
+    payload["reminders"] = {"devices": listed, "problems": problems}
+    payload["notify_state"] = new_state if devices else (state or {})
+    sent = sum(1 for r in results if r["ok"])
+    print(f"Reminders: {len(notes)} notification(s), delivered to {sent} of {len(devices)} device(s)")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--demo", action="store_true")
     ap.add_argument("--previous", default="")
     ap.add_argument("--out", default=str(SITE))
+    ap.add_argument("--test-push", action="store_true", help="also send a test notification to every device")
     args = ap.parse_args()
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -255,6 +294,15 @@ def main():
         return 1
     previous = load_previous(args.previous, settings["passphrase"]) if args.previous else None
     payload = collect(settings, previous)
+    try:
+        add_reminders(payload, settings, previous, test=args.test_push)
+    except Exception as e:  # reminders must never stop the deadlines from updating
+        reason = _safe_error(e, settings)
+        print(f"Reminders: FAILED - {reason}", file=sys.stderr)
+        payload["reminders"] = {**((previous or {}).get("reminders") or {}), "problems": [f"Reminders failed: {reason}"]}
+        payload["notify_state"] = (previous or {}).get("notify_state") or {}
+        if (previous or {}).get("push_public_key"):
+            payload["push_public_key"] = previous["push_public_key"]
     if payload["sources"] and len(payload["errors"]) == len(payload["sources"]) and not payload["items"]:
         # Everything failed and there's nothing to show: fail so the last good deploy stays up.
         print("All sources failed; not publishing.", file=sys.stderr)

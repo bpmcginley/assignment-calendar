@@ -36,12 +36,35 @@ already did in Safari.
 | `GRADESCOPE_EMAIL` | your Gradescope login email |
 | `GRADESCOPE_PASSWORD` | your Gradescope password (if you use "School Credentials", set one via *Forgot password*) |
 | `DATA_PASSPHRASE` | a passphrase you make up, e.g. four random words. You'll type it once per device |
+| `VAPID_PRIVATE_KEY` | key for sending reminders (see Reminders) |
 
 Or from a terminal in this folder (each command prompts for the value, so nothing lands in your shell history):
 
 ```bash
 gh secret set GRADESCOPE_EMAIL
 ```
+
+## Reminders
+
+The scheduled job also sends push notifications to the installed app:
+
+- about 6 hours before each deadline that isn't done (deadlines at the same time are combined), and
+- a summary at 10 AM Eastern of what's due by midnight.
+
+They go out on the first scheduled run after the moment, so they can be up to ~30 minutes late.
+Gradescope submissions count as done; done marks you set in the app live on that device only, so those
+items still get reminders.
+
+Setup (once): add the `VAPID_PRIVATE_KEY` secret (the private key for sending pushes; `notify.py` has
+`generate_vapid_private_key()`), then in the app open Settings → Reminders → **Turn on reminders**, and add the
+setup code it shows to `push-subscriptions.json`:
+
+```json
+{"devices": [{"name": "iPhone", "code": "<setup code>"}]}
+```
+
+The code is the phone's push subscription encrypted with your passphrase, so it's safe in a public repo.
+To test delivery: Actions → Update calendar → Run workflow → tick "Also send a test notification".
 
 ## Refreshing
 
@@ -73,6 +96,7 @@ Tests: `python -m unittest discover tests`
 ## Files
 
 - `build.py`: fetch, merge, clean up course names and titles, encrypt.
+- `notify.py`: decides which reminders are due and sends them.
 - `canvas.py`: reads the Canvas calendar feed. Canvas exports 11:59 PM deadlines as all-day dates; this restores the time.
 - `gradescope.py`: logs in and reads your current term's courses and assignments.
 - `site/`: the web app (static HTML/CSS/JS, works offline, installable).

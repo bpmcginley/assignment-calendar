@@ -1092,6 +1092,10 @@ function settingsContent(now = new Date()) {
     }), state.payload?.demo ? 'This is sample data.' : null);
   }
 
+  section('Reminders', reminderRows(textRow, btnRow, now),
+    'A reminder 6 hours before each deadline, and a summary at 10 AM of what is due today. ' +
+    'They can arrive up to about 30 minutes late. Items marked done only on this device still get reminders.');
+
   section('Calendar', [
     btnRow('Export upcoming deadlines (.ics)', exportAll, null, 'set-export'),
   ], "This is a snapshot. It won't update by itself.");
@@ -1106,6 +1110,109 @@ function settingsContent(now = new Date()) {
     textRow(`Version ${APP_VERSION}${state.shellBuild ? ` (${state.shellBuild})` : ''}`, null, { 'data-version': '' }),
   ], 'Install on iPhone: open this page in Safari, tap Share (on iOS 26 it is under the ••• button), then Add to Home Screen. Leave “Open as Web App” on, tap Add, and open Due from your Home Screen. On Windows, use Install in the Edge or Chrome address bar.');
   return frag;
+}
+
+// ---------------------------------------------------------------- reminders (push)
+
+/** Reads this device's push state; settings re-render once it's known. */
+async function checkPush() {
+  const p = { supported: 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window };
+  p.permission = p.supported ? Notification.permission : 'unsupported';
+  if (p.supported) {
+    try {
+      const reg = swReg || await navigator.serviceWorker.getRegistration();
+      const sub = reg && await reg.pushManager.getSubscription();
+      if (sub) { p.sub = sub; p.id = await S.deviceId(sub.endpoint); }
+    } catch { /* treat as not subscribed */ }
+  }
+  state.push = p;
+  return p;
+}
+
+function reminderRows(textRow, btnRow, now) {
+  const p = state.push;
+  if (!p) { checkPush().then(() => renderSettingsIfShown()); return [textRow('Checking…', 'muted')]; }
+  if (!p.supported) {
+    return [textRow(isIOS() && !isStandalone()
+      ? 'Reminders work in the Home Screen app. Open Due from your Home Screen to turn them on.'
+      : "This browser can't show reminders.", 'muted')];
+  }
+  const serverKey = state.payload?.push_public_key;
+  if (!serverKey) return [textRow("Reminders aren't set up on the server yet.", 'muted')];
+  if (p.permission === 'denied') {
+    return [textRow('Notifications are blocked for Due. Turn them on in iPhone Settings, Notifications, Due.', 'warn')];
+  }
+  if (!p.sub) return [btnRow('Turn on reminders', enableReminders, null, 'set-push-on')];
+
+  const dev = (state.payload?.reminders?.devices || []).find((d) => d.id === p.id);
+  if (dev && dev.ok) {
+    return [
+      textRow(dev.last_sent ? `On. Last reminder: ${T.stamp(new Date(dev.last_sent), now)}` : 'On. No reminders sent yet.'),
+      btnRow('Turn off reminders', disableReminders, 'danger-text', 'set-push-off'),
+    ];
+  }
+  if (dev && !dev.ok) {
+    return [
+      textRow(dev.error || 'Reminders stopped reaching this device.', 'warn'),
+      btnRow('Turn on again', () => disableReminders().then(enableReminders), null, 'set-push-again'),
+    ];
+  }
+  // Subscribed here, but the server doesn't list this device yet: show the code to hand over.
+  if (!state.pushCode) {
+    S.encryptForServer(state.keys, p.sub.toJSON())
+      .then((c) => { state.pushCode = c; renderSettingsIfShown(); })
+      .catch(() => { state.pushCode = 'unlock-needed'; renderSettingsIfShown(); });
+    return [textRow('Preparing setup code…', 'muted')];
+  }
+  if (state.pushCode === 'unlock-needed') {
+    return [textRow('To finish, use Forget passphrase below, unlock again, then come back here.', 'warn')];
+  }
+  const code = state.pushCode;
+  return [
+    textRow('Almost done. Send this setup code to finish. It is encrypted with your passphrase.'),
+    h('div', { class: 'set-row code-row' }, h('textarea', {
+      class: 'code-box', readonly: '', rows: '4', 'aria-label': 'Setup code', spellcheck: 'false',
+      onfocus: (e) => e.target.select(),
+    }, code)),
+    btnRow('Copy code', () => copyText(code), null, 'set-push-copy'),
+    navigator.share ? btnRow('Share code', () => navigator.share({ text: code }).catch(() => {}), null, 'set-push-share') : null,
+    textRow('Reminders start within about 30 minutes of the code being added. This section will then say On.', 'muted'),
+  ];
+}
+
+function enableReminders() {
+  // requestPermission must run straight from the tap (iOS ignores it after an await).
+  const asked = Notification.requestPermission();
+  (async () => {
+    try {
+      if (await asked !== 'granted') { await checkPush(); renderSettingsIfShown(); return; }
+      const reg = swReg || await navigator.serviceWorker.getRegistration();
+      const key = state.payload.push_public_key;
+      const raw = Uint8Array.from(atob(key.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - key.length % 4) % 4)), (c) => c.charCodeAt(0));
+      await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: raw });
+      state.pushCode = null;
+    } catch {
+      toastIfPossible("Couldn't turn on reminders on this device.");
+    }
+    await checkPush();
+    renderSettingsIfShown();
+  })();
+}
+
+async function disableReminders() {
+  try { await state.push?.sub?.unsubscribe(); } catch { /* already gone */ }
+  state.pushCode = null;
+  await checkPush();
+  renderSettingsIfShown();
+}
+
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); toastIfPossible('Code copied.'); }
+  catch { toastIfPossible('Select the code and copy it.'); }
+}
+
+function renderSettingsIfShown() {
+  if ($('#settings-dialog').open || state.tab === 'settings') renderSettings();
 }
 
 function lastUpdatedText(now) {
@@ -1548,7 +1655,10 @@ function registerSW() {
   navigator.serviceWorker.register('sw.js').then((r) => { swReg = r; }).catch(() => {});
   // A new worker took over (after SKIP_WAITING), or the worker cached changed app files.
   navigator.serviceWorker.addEventListener('controllerchange', () => { if (hadController) shellChanged = true; });
-  navigator.serviceWorker.addEventListener('message', (e) => { if (e.data?.type === 'SHELL_UPDATED') shellChanged = true; });
+  navigator.serviceWorker.addEventListener('message', (e) => {
+    if (e.data?.type === 'SHELL_UPDATED') shellChanged = true;
+    if (e.data?.type === 'REFRESH') refresh();   // a reminder was tapped while the app was open
+  });
 }
 /** Called when the app comes to the foreground. Returns true if it is reloading. */
 function maybeReloadForUpdate() {

@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: "7,37 * * * *"   # about every 30 minutes (GitHub may delay scheduled runs a little)
   workflow_dispatch:          # "Run workflow" button for an immediate refresh
+    inputs:
+      test_push:
+        description: "Also send a test notification to every device"
+        type: boolean
+        default: false
   push:
     branches: [main]
 
@@ -29,7 +34,7 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      - run: pip install -r requirements.txt
+      - run: pip install -r requirements.txt pywebpush
 
       - name: Fetch Canvas + Gradescope and encrypt
         env:
@@ -37,13 +42,15 @@ jobs:
           GRADESCOPE_EMAIL: ${{ secrets.GRADESCOPE_EMAIL }}
           GRADESCOPE_PASSWORD: ${{ secrets.GRADESCOPE_PASSWORD }}
           DATA_PASSPHRASE: ${{ secrets.DATA_PASSPHRASE }}
+          VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
+          TEST_PUSH: ${{ inputs.test_push && '--test-push' || '' }}
         run: |
           if [ -z "$DATA_PASSPHRASE" ]; then
             echo "::error::DATA_PASSPHRASE secret is not set. Refusing to publish unencrypted data."
             exit 1
           fi
           rm -f site/data.json site/data.enc.json
-          python build.py --previous "${{ format('https://{0}.github.io/{1}/data.enc.json', github.repository_owner, github.event.repository.name) }}"
+          python build.py $TEST_PUSH --previous "${{ format('https://{0}.github.io/{1}/data.enc.json', github.repository_owner, github.event.repository.name) }}"
           test ! -e site/data.json   # never publish plaintext
 
       - uses: actions/configure-pages@v6

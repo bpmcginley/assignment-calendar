@@ -29,9 +29,15 @@ For local testing: `site/data.json` (demo data) and `site/data.enc.json` encrypt
     "canvas":     {"ok": true,  "last_success": "2026-10-06T16:30:00+00:00", "error": null},
     "gradescope": {"ok": false, "last_success": "2026-10-06T14:10:00+00:00", "error": "login failed"}
   },
-  "items": [ Item, ... ]
+  "items": [ Item, ... ],
+  "push_public_key": "<base64url VAPID public key; absent until VAPID_PRIVATE_KEY is set>",
+  "reminders": {"devices": [{"id": "<sha256(endpoint)[:16]>", "name": "iPhone", "ok": true,
+                             "error": null, "last_sent": "<ISO>"}], "problems": []},
+  "notify_state": {"sent": {"<item id>|<due>": "<ISO>"}, "digest_day": "2026-10-06"}
 }
 ```
+
+`notify_state` is the sender's memory between runs (which reminders already went out); the app ignores it.
 
 `items` is sorted by `due` ascending and covers roughly 14 days back through the end of term.
 

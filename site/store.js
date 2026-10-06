@@ -98,6 +98,30 @@ export async function decryptBlob(aes, blob) {
   return JSON.parse(new TextDecoder().decode(pt));
 }
 
+/**
+ * Encrypt a small object (the push subscription) with the same passphrase, for the server to read.
+ * Returns a single base64 code: {"v":1,"salt","iter","iv","ct"}. Needs the stored PBKDF2 `base` key;
+ * the AES key kept for decryption is decrypt-only.
+ */
+export async function encryptForServer(keys, obj) {
+  if (!keys || !keys.base || !keys.salt) throw new Error('needs-unlock');
+  const iter = keys.iter || 600000;
+  const key = await crypto.subtle.deriveKey(
+    { name: 'PBKDF2', hash: 'SHA-256', salt: b64(keys.salt), iterations: iter },
+    keys.base, { name: 'AES-GCM', length: 256 }, false, ['encrypt']);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key,
+    new TextEncoder().encode(JSON.stringify(obj))));
+  const enc = (u) => { let s = ''; for (const b of u) s += String.fromCharCode(b); return btoa(s); };
+  return btoa(JSON.stringify({ v: 1, salt: keys.salt, iter, iv: enc(iv), ct: enc(ct) }));
+}
+
+/** SHA-256 of the push endpoint, first 16 hex chars; matches notify.device_id on the server. */
+export async function deviceId(endpoint) {
+  const d = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(endpoint)));
+  return [...d].map((b) => b.toString(16).padStart(2, '0')).join('').slice(0, 16);
+}
+
 /** Try a passphrase against a blob. Returns {payload, keys} or null when it is wrong. */
 export async function tryPassphrase(passphrase, blob) {
   const iter = blob.iter || 600000;
