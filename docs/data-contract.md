@@ -33,9 +33,14 @@ For local testing: `site/data.json` (demo data) and `site/data.enc.json` encrypt
   "push_public_key": "<base64url VAPID public key; absent until VAPID_PRIVATE_KEY is set>",
   "reminders": {"devices": [{"id": "<sha256(endpoint)[:16]>", "name": "iPhone", "ok": true,
                              "error": null, "last_sent": "<ISO>"}], "problems": []},
-  "notify_state": {"sent": {"<item id>|<due>": "<ISO>"}, "digest_day": "2026-10-06"}
+  "notify_state": {"sent": {"<item id>|<due>": "<ISO>"}, "digest_day": "2026-10-06"},
+  "done_marks": {"updated_at": "<ISO, set by the device>", "done": {"<item id>": true}}
 }
 ```
+
+`done_marks` are the app's done/not-done overrides, synced from a connected device: the app sends its full set,
+encrypted with the passphrase, as the `done_marks` input of a workflow_dispatch run; the newest set wins. Apps adopt
+it when it's newer than their own, and reminders treat those items as done.
 
 `notify_state` is the sender's memory between runs (which reminders already went out); the app ignores it.
 

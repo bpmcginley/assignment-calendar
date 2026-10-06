@@ -52,8 +52,15 @@ The scheduled job also sends push notifications to the installed app:
 - a summary at 10 AM Eastern of what's due by midnight.
 
 They go out on the first scheduled run after the moment, so they can be up to ~30 minutes late.
-Gradescope submissions count as done; done marks you set in the app live on that device only, so those
-items still get reminders.
+Gradescope submissions count as done, and so do items you tick off in the app once they've synced.
+
+## Syncing done marks
+
+In the app: Settings → Sync done marks → **Connect this device**. It links to GitHub with a token form pre-filled
+(name, no expiry, only *Actions: Read and write*); choose **Only select repositories → assignment-calendar**,
+generate, and paste the token into the app. The token stays on that device and can only start the update job.
+Each change starts one update run with the marks encrypted as its input, so they reach the server in ~2 minutes.
+Devices that aren't connected still receive marks from the server; they just can't send their own.
 
 Setup (once): add the `VAPID_PRIVATE_KEY` secret (the private key for sending pushes; `notify.py` has
 `generate_vapid_private_key()`), then in the app open Settings → Reminders → **Turn on reminders**, and add the

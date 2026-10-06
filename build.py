@@ -231,6 +231,34 @@ def write(path, obj):
     print(f"wrote {path} ({path.stat().st_size // 1024} KB)")
 
 
+def apply_done_marks(payload, settings, previous):
+    """Done marks synced from the app (workflow input DONE_MARKS). The newest set wins; it's kept in the
+    encrypted payload so every device and the reminder sender see it."""
+    chosen = (previous or {}).get("done_marks")
+    code = (os.environ.get("DONE_MARKS") or "").strip()
+    if code and settings["passphrase"]:
+        try:
+            got = notify.decrypt_code(code, settings["passphrase"], _key)
+            ok = (got.get("v") == 1 and isinstance(got.get("done"), dict) and
+                  all(isinstance(k, str) and isinstance(v, bool) for k, v in got["done"].items()))
+            datetime.fromisoformat(got["updated_at"].replace("Z", "+00:00"))
+            if not ok:
+                raise ValueError("unexpected format")
+            if not chosen or _ts(got["updated_at"]) > _ts(chosen["updated_at"]):
+                chosen = {"updated_at": got["updated_at"], "done": got["done"]}
+                print(f"Done marks: received {len(got['done'])} from a device")
+        except Exception as e:
+            print(f"Done marks: ignored an update that couldn't be read ({type(e).__name__})", file=sys.stderr)
+    if chosen:
+        ids = {i["id"] for i in payload["items"]}
+        payload["done_marks"] = {"updated_at": chosen["updated_at"],
+                                 "done": {k: v for k, v in chosen["done"].items() if k in ids}}
+
+
+def _ts(iso):
+    return datetime.fromisoformat(iso.replace("Z", "+00:00"))
+
+
 def add_reminders(payload, settings, previous, test=False):
     """Plan and send push reminders (see notify.py); record what was sent inside the payload."""
     private_key = (os.environ.get("VAPID_PRIVATE_KEY") or "").strip()
@@ -243,7 +271,9 @@ def add_reminders(payload, settings, previous, test=False):
     else:
         state = previous.get("notify_state") or {}
     now = datetime.now(timezone.utc)
-    notes, new_state = notify.plan(payload, state, now)
+    marks = (payload.get("done_marks") or {}).get("done", {})
+    view = dict(payload, items=[dict(i, done=marks.get(i["id"], i.get("done", False))) for i in payload["items"]])
+    notes, new_state = notify.plan(view, state, now)
     if test:
         notes.insert(0, {"title": "Reminders are working", "kind": "test", "tag": "test",
                          "body": "You'll get a reminder 6 hours before each deadline and a summary at 10 AM."})
@@ -294,6 +324,7 @@ def main():
         return 1
     previous = load_previous(args.previous, settings["passphrase"]) if args.previous else None
     payload = collect(settings, previous)
+    apply_done_marks(payload, settings, previous)
     try:
         add_reminders(payload, settings, previous, test=args.test_push)
     except Exception as e:  # reminders must never stop the deadlines from updating

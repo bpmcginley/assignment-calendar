@@ -845,3 +845,16 @@ html:has(dialog[open]) { overflow: hidden; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* GitHub token field (Settings > Sync done marks); 16px so iOS doesn't zoom on focus. */
+.token-input {
+  width: 100%;
+  min-height: 44px;
+  padding: 0 var(--s3);
+  border: 1px solid var(--field-border);
+  border-radius: var(--r-md);
+  background: var(--bg);
+  color: var(--text);
+  font: 400 16px/1.3 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+a.set-row { color: var(--accent); text-decoration: none; }

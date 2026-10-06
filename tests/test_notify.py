@@ -106,5 +106,49 @@ class DeviceCodeTests(unittest.TestCase):
         self.assertEqual((len(raw), raw[0]), (65, 4))
 
 
+def app_code(obj, passphrase="pw"):
+    """Encrypt like site/store.js encryptForServer."""
+    salt, iv = secrets.token_bytes(16), secrets.token_bytes(12)
+    ct, tag = AES.new(build._key(passphrase, salt, 1000), AES.MODE_GCM, nonce=iv).encrypt_and_digest(json.dumps(obj).encode())
+    b = lambda x: base64.b64encode(x).decode()
+    return b(json.dumps({"v": 1, "salt": b(salt), "iter": 1000, "iv": b(iv), "ct": b(ct + tag)}).encode())
+
+
+class DoneMarksTests(unittest.TestCase):
+    SETTINGS = {"passphrase": "pw"}
+
+    def run_apply(self, code, previous=None):
+        import os
+        payload = {"items": [dict(i) for i in PAYLOAD["items"]]}
+        os.environ["DONE_MARKS"] = code or ""
+        try:
+            build.apply_done_marks(payload, self.SETTINGS, previous)
+        finally:
+            os.environ.pop("DONE_MARKS", None)
+        return payload
+
+    def test_newer_marks_win_and_unknown_ids_are_dropped(self):
+        prev = {"done_marks": {"updated_at": "2026-10-06T20:00:00Z", "done": {"a": True}}}
+        p = self.run_apply(app_code({"v": 1, "updated_at": "2026-10-06T21:00:00.000Z", "done": {"b": True, "gone": True}}), prev)
+        self.assertEqual(p["done_marks"]["done"], {"b": True})
+        p = self.run_apply(app_code({"v": 1, "updated_at": "2026-10-06T19:00:00.000Z", "done": {"c": True}}), prev)
+        self.assertEqual(p["done_marks"]["done"], {"a": True})          # older update ignored
+
+    def test_unreadable_code_keeps_previous(self):
+        prev = {"done_marks": {"updated_at": "2026-10-06T20:00:00Z", "done": {"a": True}}}
+        p = self.run_apply(app_code({"v": 1, "updated_at": "2026-10-07T00:00:00Z", "done": {}}, passphrase="other"), prev)
+        self.assertEqual(p["done_marks"]["done"], {"a": True})
+
+    def test_reminders_skip_marked_items(self):
+        import os
+        payload = {"items": [dict(i) for i in PAYLOAD["items"]],
+                   "done_marks": {"updated_at": "2026-10-06T20:00:00Z", "done": {"a": True}}}
+        marks = payload["done_marks"]["done"]
+        view = dict(payload, items=[dict(i, done=marks.get(i["id"], i.get("done", False))) for i in payload["items"]])
+        notes, _ = notify.plan(view, {}, et(2026, 10, 6, 18, 7))
+        first = [n for n in notes if n["kind"] == "reminder"][0]
+        self.assertEqual(first["title"], "230 Project 1 Questionnaires")   # Quiz 3 (a) skipped, no longer grouped
+
+
 if __name__ == "__main__":
     unittest.main()

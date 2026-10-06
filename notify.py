@@ -54,13 +54,18 @@ def device_id(endpoint):
     return hashlib.sha256(endpoint.encode("utf-8")).hexdigest()[:16]
 
 
-def decode_device_code(code, passphrase, kdf):
-    """The app's code: base64 of {"v":1,"salt","iter","iv","ct"}; ct = AES-GCM(subscription JSON)."""
+def decrypt_code(code, passphrase, kdf):
+    """Codes from the app (store.js encryptForServer): base64 of {"v":1,"salt","iter","iv","ct"},
+    ct = AES-GCM(JSON) with a PBKDF2 key from the passphrase. Raises if the passphrase doesn't match."""
     blob = json.loads(base64.b64decode(re.sub(r"\s+", "", code)))
     key = kdf(passphrase, base64.b64decode(blob["salt"]), blob["iter"])
     raw = base64.b64decode(blob["ct"])
     cipher = AES.new(key, AES.MODE_GCM, nonce=base64.b64decode(blob["iv"]))
-    sub = json.loads(cipher.decrypt_and_verify(raw[:-16], raw[-16:]))
+    return json.loads(cipher.decrypt_and_verify(raw[:-16], raw[-16:]))
+
+
+def decode_device_code(code, passphrase, kdf):
+    sub = decrypt_code(code, passphrase, kdf)
     if not sub.get("endpoint") or not (sub.get("keys") or {}).get("p256dh"):
         raise ValueError("not a push subscription")
     return sub

@@ -53,6 +53,18 @@ export async function clearKeys() {
   try { await tx('readwrite', (s) => s.delete(REC)); } catch { /* nothing stored */ }
 }
 
+// ---- GitHub token for syncing done marks (fine-grained, Actions: write on this repo only) ----
+const TOKEN_REC = 'github';
+export async function loadToken() {
+  try { return (await tx('readonly', (s) => s.get(TOKEN_REC))) || null; } catch { return null; }
+}
+export async function saveToken(token) {
+  try { await tx('readwrite', (s) => s.put(token, TOKEN_REC)); return true; } catch { return false; }
+}
+export async function clearToken() {
+  try { await tx('readwrite', (s) => s.delete(TOKEN_REC)); } catch { /* nothing stored */ }
+}
+
 // ---- localStorage (per-device preferences; every access guarded) ----
 export function lsGet(key, fallback) {
   try {
@@ -103,12 +115,17 @@ export async function decryptBlob(aes, blob) {
  * Returns a single base64 code: {"v":1,"salt","iter","iv","ct"}. Needs the stored PBKDF2 `base` key;
  * the AES key kept for decryption is decrypt-only.
  */
+let encKeyCache = null;
 export async function encryptForServer(keys, obj) {
   if (!keys || !keys.base || !keys.salt) throw new Error('needs-unlock');
   const iter = keys.iter || 600000;
-  const key = await crypto.subtle.deriveKey(
-    { name: 'PBKDF2', hash: 'SHA-256', salt: b64(keys.salt), iterations: iter },
-    keys.base, { name: 'AES-GCM', length: 256 }, false, ['encrypt']);
+  // PBKDF2 at 600k iterations takes ~1 s; keep the derived key for this session (per salt).
+  if (!encKeyCache || encKeyCache.base !== keys.base || encKeyCache.salt !== keys.salt) {
+    encKeyCache = { base: keys.base, salt: keys.salt, key: crypto.subtle.deriveKey(
+      { name: 'PBKDF2', hash: 'SHA-256', salt: b64(keys.salt), iterations: iter },
+      keys.base, { name: 'AES-GCM', length: 256 }, false, ['encrypt']) };
+  }
+  const key = await encKeyCache.key;
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key,
     new TextEncoder().encode(JSON.stringify(obj))));

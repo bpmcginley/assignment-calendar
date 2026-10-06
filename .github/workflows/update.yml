@@ -9,6 +9,10 @@ on:
         description: "Also send a test notification to every device"
         type: boolean
         default: false
+      done_marks:
+        description: "Done marks sent by the app (encrypted with the passphrase)"
+        type: string
+        required: false
   push:
     branches: [main]
 
@@ -43,6 +47,7 @@ jobs:
           GRADESCOPE_PASSWORD: ${{ secrets.GRADESCOPE_PASSWORD }}
           DATA_PASSPHRASE: ${{ secrets.DATA_PASSPHRASE }}
           VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
+          DONE_MARKS: ${{ inputs.done_marks }}
           TEST_PUSH: ${{ inputs.test_push && '--test-push' || '' }}
         run: |
           if [ -z "$DATA_PASSPHRASE" ]; then

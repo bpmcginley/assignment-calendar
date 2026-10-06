@@ -5,6 +5,8 @@ import { buildICS, downloadICS, slug } from './ics.js';
 
 const APP_VERSION = '1.0';
 const DONE_KEY = 'due.done.v1';
+const DONE_TS_KEY = 'due.done.ts';      // when this device's done marks last changed (ISO)
+const SYNC_KEY = 'due.sync.v1';         // {sent_ts, at, error}: last time marks were sent to GitHub
 const { DAY, HOUR, MIN } = T;
 const HOLIDAY = /holiday|no class|recess|break/i;
 const EXAM = /\b(exam|midterm|final)s?\b/i;
@@ -151,6 +153,7 @@ function setPayload(p) {
   state.gen = new Date(p.generated_at);
   if (Number.isNaN(+state.gen)) state.gen = new Date();
   state.items = normalize(p.items);
+  mergeServerDone(p.done_marks);
   computeCourses();
   if (state.filter !== 'all' && !state.courseMap.has(state.filter)) state.filter = 'all';
   if (state.selectedId && !itemById(state.selectedId)) state.selectedId = null;
@@ -735,12 +738,96 @@ function setOverride(it, val) {
   const o = state.overrides;
   const prev = hasOwn(o, it.id) ? o[it.id] : undefined;
   if (val === !!it.done) delete o[it.id]; else o[it.id] = val;
-  S.lsSet(DONE_KEY, o);
+  saveOverrides();
   return prev;
 }
 function restoreOverride(id, prev) {
   if (prev === undefined) delete state.overrides[id]; else state.overrides[id] = prev;
+  saveOverrides();
+}
+
+// ---- syncing done marks through GitHub (see docs/data-contract.md: done_marks) ----
+
+function saveOverrides() {
   S.lsSet(DONE_KEY, state.overrides);
+  S.lsSet(DONE_TS_KEY, new Date().toISOString());
+  scheduleSync();
+}
+
+/** Newer marks win. Server newer (another device synced) -> adopt; this device newer -> send. */
+function mergeServerDone(sd) {
+  const localTs = S.lsGet(DONE_TS_KEY, null);
+  if (!localTs && Object.keys(state.overrides).length) {
+    S.lsSet(DONE_TS_KEY, new Date().toISOString());   // marks from before sync existed
+    scheduleSync();
+    return;
+  }
+  if (!sd || !sd.updated_at || !sd.done) return;
+  const server = Date.parse(sd.updated_at), local = localTs ? Date.parse(localTs) : 0;
+  if (server > local) {
+    state.overrides = { ...sd.done };
+    S.lsSet(DONE_KEY, state.overrides);
+    S.lsSet(DONE_TS_KEY, sd.updated_at);
+  } else if (server < local) {
+    scheduleSync();
+  }
+}
+
+function repoInfo() {
+  const m = /^([\w-]+)\.github\.io$/i.exec(location.hostname);
+  const repo = location.pathname.split('/').filter(Boolean)[0];
+  return m && repo ? { owner: m[1], repo } : null;
+}
+const GH_API = 'https://api.github.com';
+const ghHeaders = (token) => ({ Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' });
+
+let syncTimer = null;
+function scheduleSync() {
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(() => { syncTimer = null; syncDone().then(renderSettingsIfShown); }, 4000);
+}
+function flushSync() {
+  if (!syncTimer) return;
+  clearTimeout(syncTimer); syncTimer = null;
+  syncDone();
+}
+
+/** One sync at a time; a request that arrives mid-sync runs once more afterwards. */
+let syncing = null, syncAgain = false;
+function syncDone(opts) {
+  if (syncing) { syncAgain = true; return syncing; }
+  syncing = sendDoneMarks(opts).finally(() => {
+    syncing = null;
+    if (syncAgain) { syncAgain = false; syncDone(); }
+  });
+  return syncing;
+}
+
+/** Send this device's marks if the server is behind. Starts one update run on GitHub (~1-2 min). */
+async function sendDoneMarks({ force = false } = {}) {
+  const where = repoInfo();
+  const ts = S.lsGet(DONE_TS_KEY, null);
+  if (!where || !ts || !state.keys) return;
+  const token = await S.loadToken();
+  if (!token) return;
+  const serverTs = state.payload?.done_marks?.updated_at;
+  if (!force && serverTs && Date.parse(serverTs) >= Date.parse(ts)) return;   // already there
+  const last = S.lsGet(SYNC_KEY, {});
+  // A sent update can be dropped if GitHub cancels a queued run; resend after 5 minutes if still behind.
+  if (!force && last.sent_ts === ts && !last.error && Date.now() - Date.parse(last.at) < 5 * MIN) return;
+  try {
+    const code = await S.encryptForServer(state.keys, { v: 1, updated_at: ts, done: state.overrides });
+    const res = await fetch(`${GH_API}/repos/${where.owner}/${where.repo}/actions/workflows/update.yml/dispatches`, {
+      method: 'POST', keepalive: true, headers: ghHeaders(token),
+      body: JSON.stringify({ ref: 'main', inputs: { done_marks: code } }),
+    });
+    if (res.ok) S.lsSet(SYNC_KEY, { sent_ts: ts, at: new Date().toISOString(), error: null });
+    else S.lsSet(SYNC_KEY, { ...last, error: res.status === 401 || res.status === 403 || res.status === 404
+      ? 'GitHub rejected the token. Connect this device again.' : `GitHub error ${res.status}. Will retry.` });
+  } catch (e) {
+    S.lsSet(SYNC_KEY, { ...last, error: e?.message === 'needs-unlock'
+      ? 'Forget the passphrase and unlock again to sync.' : 'Offline. Will retry.' });
+  }
 }
 
 function toggleDone(it, val, li) {
@@ -1094,14 +1181,18 @@ function settingsContent(now = new Date()) {
 
   section('Reminders', reminderRows(textRow, btnRow, now),
     'A reminder 6 hours before each deadline, and a summary at 10 AM of what is due today. ' +
-    'They can arrive up to about 30 minutes late. Items marked done only on this device still get reminders.');
+    'They can arrive up to about 30 minutes late. Items you mark done are skipped once they have synced.');
+
+  section('Sync done marks', syncRows(textRow, btnRow, now),
+    'Sends your done marks to the server, so reminders skip them and your other devices show them. ' +
+    'Changes reach the server in about 2 minutes.');
 
   section('Calendar', [
     btnRow('Export upcoming deadlines (.ics)', exportAll, null, 'set-export'),
   ], "This is a snapshot. It won't update by itself.");
 
   section('This device', [
-    textRow('Done marks are saved on this device only.', 'muted'),
+    textRow(state.ghToken ? 'Done marks sync through GitHub.' : 'Done marks are saved on this device until it is connected under Sync done marks.', 'muted'),
     btnRow('Clear done marks', clearDoneMarks, null, 'set-clear'),
     state.dataSource === 'enc' || state.keys ? btnRow('Forget passphrase on this device', forgetPassphrase, 'danger-text', 'set-forget') : null,
   ]);
@@ -1178,6 +1269,71 @@ function reminderRows(textRow, btnRow, now) {
     navigator.share ? btnRow('Share code', () => navigator.share({ text: code }).catch(() => {}), null, 'set-push-share') : null,
     textRow('Reminders start within about 30 minutes of the code being added. This section will then say On.', 'muted'),
   ];
+}
+
+function syncRows(textRow, btnRow, now) {
+  const where = repoInfo();
+  if (!where) return [textRow('Sync works on the published site.', 'muted')];
+  if (state.ghToken === undefined) {
+    S.loadToken().then((t) => { state.ghToken = t; renderSettingsIfShown(); });
+    return [textRow('Checking…', 'muted')];
+  }
+  if (!state.ghToken) {
+    if (!state.connecting) {
+      return [btnRow('Connect this device', () => { state.connecting = true; renderSettings(); }, null, 'set-sync-connect')];
+    }
+    const url = 'https://github.com/settings/personal-access-tokens/new?' + new URLSearchParams({
+      name: 'Due done marks', description: 'Lets the Due app start its update job to sync done marks.',
+      target_name: where.owner, expires_in: 'none', actions: 'write' });
+    const input = h('input', { type: 'password', class: 'token-input', autocomplete: 'off', autocapitalize: 'off',
+      spellcheck: 'false', placeholder: 'github_pat_…', 'aria-label': 'GitHub token' });
+    return [
+      textRow(`1. Create a token. Under Repository access choose Only select repositories, pick ${where.repo}, then Generate token and copy it.`),
+      h('a', { class: 'set-row', href: url, target: '_blank', rel: 'noopener', 'data-focus-key': 'set-sync-link' }, 'Create token on GitHub'),
+      textRow("2. Paste it here. It stays on this device and can only start this app's update job."),
+      h('div', { class: 'set-row code-row' }, input),
+      btnRow('Save token', () => connectGithub(input.value), null, 'set-sync-save'),
+      state.connectError ? textRow(state.connectError, 'warn') : null,
+      btnRow('Cancel', () => { state.connecting = false; state.connectError = null; renderSettings(); }, null, 'set-sync-cancel'),
+    ];
+  }
+  const ts = S.lsGet(DONE_TS_KEY, null);
+  const serverTs = state.payload?.done_marks?.updated_at;
+  const last = S.lsGet(SYNC_KEY, {});
+  let status;
+  if (last.error) status = textRow(last.error, 'warn');
+  else if (!ts || (serverTs && Date.parse(serverTs) >= Date.parse(ts))) status = textRow('On. The server has your latest done marks.');
+  else if (last.sent_ts === ts) status = textRow(`Sent ${T.ago(new Date(last.at), now)}. Waiting for the server to pick it up.`);
+  else status = textRow('Waiting to send…', 'muted');
+  return [
+    status,
+    btnRow('Sync now', () => syncDone({ force: true }).then(() => { announce('Sync started.'); renderSettingsIfShown(); }), null, 'set-sync-now'),
+    btnRow('Disconnect this device', async () => { await S.clearToken(); state.ghToken = null; S.lsDel(SYNC_KEY); renderSettings(); }, 'danger-text', 'set-sync-off'),
+  ];
+}
+
+async function connectGithub(raw) {
+  const token = (raw || '').trim();
+  const where = repoInfo();
+  state.connectError = null;
+  if (!/^(github_pat_|ghp_)\w+$/.test(token)) {
+    state.connectError = "That doesn't look like a GitHub token. It starts with github_pat_.";
+    renderSettings(); return;
+  }
+  try {
+    const res = await fetch(`${GH_API}/repos/${where.owner}/${where.repo}/actions/workflows/update.yml`, { headers: ghHeaders(token) });
+    if (!res.ok) throw new Error(String(res.status));
+  } catch {
+    state.connectError = `GitHub didn't accept that token. Check that it has access to ${where.repo} with Actions set to Read and write.`;
+    renderSettings(); return;
+  }
+  await S.saveToken(token);
+  state.ghToken = token;
+  state.connecting = false;
+  if (!S.lsGet(DONE_TS_KEY, null)) S.lsSet(DONE_TS_KEY, new Date().toISOString());
+  await syncDone({ force: true });
+  renderSettings();
+  announce('Connected. Done marks will sync.');
 }
 
 function enableReminders() {
@@ -1269,7 +1425,7 @@ async function clearDoneMarks() {
   });
   if (yes) {
     state.overrides = {};
-    S.lsDel(DONE_KEY);
+    saveOverrides();
     renderAll({ keepFocus: true });
     announce('Done marks cleared.');
   }
@@ -1285,6 +1441,7 @@ async function forgetPassphrase() {
   });
   if (!yes) { if (ret?.isConnected) ret.focus(); return; }
   await S.clearKeys();
+  await S.clearToken();
   await S.clearCachedBlob();
   state.keys = null;
   state.payload = null;
@@ -1781,6 +1938,7 @@ function wire() {
       if (Date.now() - state.lastFetchAt > 60000) refresh();
       tick();
     } else {
+      flushSync();
       activateWaitingSW();
     }
   });
