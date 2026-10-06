@@ -4,7 +4,7 @@
 // cache for an instant launch, then re-fetched in the background (stale-while-revalidate). When a re-fetched
 // file differs from the cached copy, the cache is updated and open pages are told, so the app reloads the
 // next time it comes to the foreground. VERSION only needs changing to force a full cache reset.
-const VERSION = 2;
+const VERSION = 3;
 const SHELL = `due-shell-v${VERSION}`;
 const DATA = 'due-data';
 const SHELL_FILES = [

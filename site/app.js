@@ -121,8 +121,13 @@ function hash(s) {
 function computeCourses() {
   const codes = [...new Set(state.items.filter((i) => !i._holiday).map((i) => i.course))].sort();
   const dept = (c) => { const m = /^(.*?)\s*\d/.exec(c); return m ? m[1] : null; };
-  const depts = new Set(codes.map(dept));
-  const short = codes.length > 0 && depts.size === 1 && !depts.has(null) && !depts.has('');
+  // Courses in the main department show just their number ("230"); others keep the full code
+  // ("MATH 235H"). One stray Gradescope course shouldn't turn every label into "COMPSCI 230".
+  const counts = new Map();
+  for (const c of codes) { const d = dept(c); if (d) counts.set(d, (counts.get(d) || 0) + 1); }
+  const ranked = [...counts].sort((a, b) => b[1] - a[1]);
+  const mainDept = ranked.length && (ranked.length === 1 || ranked[0][1] > ranked[1][1]) ? ranked[0][0] : null;
+  const short = (c) => mainDept !== null && dept(c) === mainDept;
   const used = new Set();
   const slots = new Map();
   for (const c of codes) {
@@ -136,7 +141,7 @@ function computeCourses() {
     slots.set(c, s + 1);
     used.add(s + 1);
   }
-  state.courses = codes.map((c) => ({ code: c, label: short ? c.slice(dept(c).length).trim() : c, slot: slots.get(c) }));
+  state.courses = codes.map((c) => ({ code: c, label: short(c) ? c.slice(dept(c).length).trim() : c, slot: slots.get(c) }));
   state.courseMap = new Map(state.courses.map((c) => [c.code, c]));
 }
 const courseOf = (code) => state.courseMap.get(code) || { code, label: code, slot: 6 };
@@ -501,23 +506,26 @@ function renderFilter() {
   root.replaceChildren();
   root.className = 'filter';
   if (!state.payload || state.courses.length < 2) { root.className = ''; return; }
-  if (state.courses.length > 5) {
+  const asSelect = () => {
     const sel = h('select', { class: 'filter-select', 'aria-label': 'Course', 'data-focus-key': 'filter-select' },
       h('option', { value: 'all' }, 'All courses'),
       state.courses.map((c) => h('option', { value: c.code }, c.label)));
     sel.value = state.filter;
     sel.addEventListener('change', () => setFilter(sel.value));
-    root.append(sel);
-    return;
-  }
+    root.replaceChildren(sel);
+  };
+  if (state.courses.length > 5) return asSelect();
   const opts = [{ code: 'all', label: 'All' }, ...state.courses];
-  root.append(h('div', { class: 'seg', role: 'group', 'aria-label': 'Course' },
-    h('div', { class: 'seg-track' }, opts.map((c) => h('button', {
-      type: 'button', class: 'seg-btn', 'aria-pressed': String(state.filter === c.code),
-      'aria-label': c.code === 'all' ? 'All courses' : c.code,
-      'data-focus-key': `filter:${c.code}`,
-      onclick: () => setFilter(c.code),
-    }, c.label)))));
+  const track = h('div', { class: 'seg-track' }, opts.map((c) => h('button', {
+    type: 'button', class: 'seg-btn', 'aria-pressed': String(state.filter === c.code),
+    'aria-label': c.code === 'all' ? 'All courses' : c.code,
+    'data-focus-key': `filter:${c.code}`,
+    onclick: () => setFilter(c.code),
+  }, c.label)));
+  root.append(h('div', { class: 'seg', role: 'group', 'aria-label': 'Course' }, track));
+  // Labels that don't fit (long codes, larger text sizes) fall back to a menu instead of running off-screen.
+  // (Buttons flex down to fit, so check whether any label spills out of its button.)
+  if (track.offsetWidth && [...track.children].some((b) => b.scrollWidth > b.clientWidth + 1)) asSelect();
 }
 
 function setFilter(code) {

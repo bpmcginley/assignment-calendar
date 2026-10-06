@@ -334,6 +334,8 @@ main { padding-bottom: calc(var(--tabbar-h) + var(--safe-b) + 16px); }
   text-align: center;
   white-space: nowrap;
 }
+/* Course filter: segments size to their labels so a longer one ("MATH 235H") still fits. */
+.filter .seg-btn { flex: 1 1 auto; padding: 2px var(--s3); }
 .seg-btn::after { content: ""; position: absolute; inset: -8px 0; }
 .seg-btn[aria-pressed="true"] { background: var(--surface); border-color: var(--sep); font-weight: 600; }
 .filter-select {
