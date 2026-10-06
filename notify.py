@@ -24,7 +24,7 @@ REMIND_BEFORE = timedelta(hours=6)
 DIGEST_HOUR = 10
 DIGEST_LATEST_HOUR = 15        # don't send a "due today" summary in the late afternoon
 EXAM = re.compile(r"\b(exam|midterm|final)\b", re.I)
-CONTACT = "https://github.com/bpmcginley/assignment-calendar"   # VAPID "sub": who runs this sender
+CONTACT = "mailto:229344244+bpmcginley@users.noreply.github.com"   # VAPID "sub": the sender's contact (GitHub no-reply address)
 
 
 # ---------- keys and subscriptions ----------
