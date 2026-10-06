@@ -1,0 +1,71 @@
+name: Update calendar
+
+on:
+  schedule:
+    - cron: "7,37 * * * *"   # about every 30 minutes (GitHub may delay scheduled runs a little)
+  workflow_dispatch:          # "Run workflow" button for an immediate refresh
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+  actions: write              # lets the job keep its own schedule enabled (see last step)
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Fetch Canvas + Gradescope and encrypt
+        env:
+          CANVAS_ICS_URL: ${{ secrets.CANVAS_ICS_URL }}
+          GRADESCOPE_EMAIL: ${{ secrets.GRADESCOPE_EMAIL }}
+          GRADESCOPE_PASSWORD: ${{ secrets.GRADESCOPE_PASSWORD }}
+          DATA_PASSPHRASE: ${{ secrets.DATA_PASSPHRASE }}
+        run: |
+          if [ -z "$DATA_PASSPHRASE" ]; then
+            echo "::error::DATA_PASSPHRASE secret is not set. Refusing to publish unencrypted data."
+            exit 1
+          fi
+          rm -f site/data.json site/data.enc.json
+          python build.py --previous "${{ format('https://{0}.github.io/{1}/data.enc.json', github.repository_owner, github.event.repository.name) }}"
+          test ! -e site/data.json   # never publish plaintext
+
+      - uses: actions/configure-pages@v6
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: site
+
+      # GitHub turns off scheduled workflows after 60 days without repository activity.
+      # Re-enabling this workflow on every scheduled run keeps it alive.
+      - name: Keep schedule alive
+        if: github.event_name == 'schedule'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/update.yml/enable"
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5

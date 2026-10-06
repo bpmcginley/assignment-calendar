@@ -1,0 +1,6 @@
+config.json
+__pycache__/
+.local-build/
+site/data.json
+site/data.enc.json
+.claude/

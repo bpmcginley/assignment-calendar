@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F6F6F4" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#121212" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Due">
+<meta name="format-detection" content="telephone=no">
+<meta name="referrer" content="no-referrer">
+<meta name="description" content="Canvas and Gradescope deadlines in one list.">
+<title>Due</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
+<link rel="stylesheet" href="app.css">
+<link rel="modulepreload" href="time.js">
+<link rel="modulepreload" href="store.js">
+<link rel="modulepreload" href="ics.js">
+<script type="module" src="app.js"></script>
+</head>
+<body>
+
+<!-- Unlock: the only screen with centered content. -->
+<div id="unlock" class="unlock" hidden>
+  <div class="unlock-col">
+    <h1 class="unlock-title">Assignment Calendar</h1>
+    <div id="install-notice" class="install-notice" hidden>
+      <p>Install first. In Safari, tap Share (on iOS 26 it is under the ••• button), then Add to Home Screen. Leave “Open as Web App” on, tap Add, then open Due from your Home Screen and enter the passphrase there. The installed app doesn't share storage with Safari.</p>
+      <button type="button" class="text-btn" id="continue-safari">Continue in Safari</button>
+    </div>
+    <form id="unlock-form" class="unlock-form" novalidate>
+      <p class="unlock-lede" id="unlock-lede">Enter your calendar passphrase. You only need to do this once on this device.</p>
+      <input type="text" name="username" autocomplete="username" value="assignment-calendar" class="ghost-input" tabindex="-1" aria-hidden="true" readonly>
+      <label for="pass" class="sr-only">Passphrase</label>
+      <div class="pass-field">
+        <input id="pass" name="password" type="password" autocomplete="current-password" enterkeyhint="go"
+               autocapitalize="off" autocorrect="off" spellcheck="false" aria-describedby="unlock-error">
+        <button type="button" id="pass-toggle" class="text-btn pass-toggle" aria-controls="pass" aria-pressed="false">Show</button>
+      </div>
+      <p id="unlock-error" class="unlock-error" aria-live="assertive"></p>
+      <button type="submit" id="unlock-btn" class="btn-primary">Unlock</button>
+    </form>
+  </div>
+</div>
+
+<div id="app" class="app" hidden>
+  <!-- Wide screens: a 56px header replaces the tab bar. -->
+  <header class="desk-header">
+    <span class="brand">Due</span>
+    <div class="seg" role="group" aria-label="View">
+      <div class="seg-track">
+        <button type="button" class="seg-btn" data-tab="upcoming" aria-pressed="true">Upcoming</button>
+        <button type="button" class="seg-btn" data-tab="calendar" aria-pressed="false">Calendar</button>
+      </div>
+    </div>
+    <div class="desk-right">
+      <span id="desk-fresh" class="foot"></span>
+      <span class="dot" aria-hidden="true">·</span>
+      <button type="button" class="text-btn" data-action="refresh">Refresh</button>
+      <span class="dot" aria-hidden="true">·</span>
+      <button type="button" class="text-btn" data-tab="settings">Settings</button>
+    </div>
+  </header>
+
+  <!-- Phone: sticky top bar with a compact title that appears once the large title scrolls under it. -->
+  <div class="topbar" id="topbar"><span class="compact-title" id="compact-title" aria-hidden="true"></span></div>
+
+  <main id="main">
+    <section id="view-upcoming" class="view" aria-labelledby="t-upcoming">
+      <div class="split">
+        <div class="list-pane" id="list-pane">
+          <h1 class="large-title" id="t-upcoming">Upcoming</h1>
+          <div class="fresh" id="fresh">
+            <span id="fresh-text" class="foot"></span>
+            <button type="button" class="text-btn hit" data-action="refresh">Refresh</button>
+          </div>
+          <p class="notice" id="notice-upcoming" hidden></p>
+          <div id="summary" class="summary"></div>
+          <div id="filter"></div>
+          <div id="groups" data-roving></div>
+        </div>
+        <aside class="detail-pane" id="detail-pane" aria-label="Details"></aside>
+      </div>
+    </section>
+
+    <section id="view-calendar" class="view" aria-labelledby="t-calendar" hidden>
+      <h1 class="large-title" id="t-calendar">Calendar</h1>
+      <p class="notice" id="notice-calendar" hidden></p>
+      <div id="cal"></div>
+    </section>
+
+    <section id="view-settings" class="view" aria-labelledby="t-settings" hidden>
+      <h1 class="large-title" id="t-settings">Settings</h1>
+      <div id="settings"></div>
+    </section>
+  </main>
+
+  <nav class="tabbar" aria-label="Tabs">
+    <button type="button" class="tab" data-tab="upcoming" aria-current="page">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 5h3v3h-3zM3.5 10.5h3v3h-3zM3.5 16h3v3h-3zM10 6.5h11M10 12h11M10 17.5h11"/></svg>
+      <span>Upcoming</span>
+    </button>
+    <button type="button" class="tab" data-tab="calendar">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 5.5h17v15h-17zM3.5 10h17M8 3v4.5M16 3v4.5"/></svg>
+      <span>Calendar</span>
+    </button>
+    <button type="button" class="tab" data-tab="settings">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 8h4.5M12.5 8H21M7.5 5.5h5v5h-5zM3 16h9.5M17.5 16H21M12.5 13.5h5v5h-5z"/></svg>
+      <span>Settings</span>
+    </button>
+  </nav>
+</div>
+
+<dialog id="sheet" class="sheet" aria-labelledby="detail-title"></dialog>
+
+<dialog id="settings-dialog" class="modal settings-modal" aria-labelledby="settings-dialog-title">
+  <div class="modal-bar">
+    <h2 id="settings-dialog-title" class="modal-title">Settings</h2>
+    <button type="button" class="text-btn hit" data-close>Done</button>
+  </div>
+  <div id="settings-dialog-body"></div>
+</dialog>
+
+<dialog id="confirm" class="modal confirm" aria-labelledby="confirm-title" aria-describedby="confirm-msg">
+  <form method="dialog">
+    <h2 id="confirm-title" class="confirm-title"></h2>
+    <p id="confirm-msg" class="confirm-msg"></p>
+    <div class="confirm-actions">
+      <button value="cancel" class="text-btn hit">Cancel</button>
+      <button value="ok" id="confirm-ok" class="text-btn hit"></button>
+    </div>
+  </form>
+</dialog>
+
+<div class="toast-region" id="toast-region" role="status"></div>
+<div class="sr-only" id="sr-live" aria-live="polite"></div>
+
+<noscript><p class="noscript">Due needs JavaScript to decrypt and show your deadlines.</p></noscript>
+</body>
+</html>
