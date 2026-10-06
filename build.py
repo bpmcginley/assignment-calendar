@@ -167,6 +167,15 @@ def collect(settings, previous=None):
         fetchers.append(("gradescope", "Gradescope", lambda: gradescope.fetch(
             settings["gradescope_email"], settings["gradescope_password"], settings["latest_term_only"])))
 
+    if os.environ.get("GITHUB_ACTIONS"):
+        # On GitHub every source is expected; an empty secret should be visible, not silently skipped.
+        if not settings["canvas_ics_url"]:
+            errors.append("Canvas isn't connected: the CANVAS_ICS_URL secret is empty.")
+            print("Canvas: NOT CONFIGURED (CANVAS_ICS_URL is empty)", file=sys.stderr)
+        if not (settings["gradescope_email"] and settings["gradescope_password"]):
+            errors.append("Gradescope isn't connected: GRADESCOPE_EMAIL or GRADESCOPE_PASSWORD is empty.")
+            print("Gradescope: NOT CONFIGURED", file=sys.stderr)
+
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     prev_status = (previous or {}).get("source_status", {})
     status = {}
